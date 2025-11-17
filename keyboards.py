@@ -1,6 +1,27 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from database import Database
+from telegram import ReplyKeyboardRemove
 
+def remove_reply_keyboard():
+    """Убрать reply-клавиатуру"""
+    return ReplyKeyboardRemove()
+def get_main_inline_keyboard():
+    """Inline-клавиатура для главного меню (для использования в callback queries)"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 Список задач", callback_data="show_tasks"),
+            InlineKeyboardButton("⏰ Ближайшие", callback_data="show_urgent_tasks")
+        ],
+        [
+            InlineKeyboardButton("📊 Статистика", callback_data="show_stats"),
+            InlineKeyboardButton("✅ Выполнить", callback_data="quick_done")
+        ],
+        [
+            InlineKeyboardButton("🛠️ Управление", callback_data="manage_tasks"),
+            InlineKeyboardButton("🔔 Напоминания", callback_data="reminder_settings")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 def get_main_keyboard():
     """Основная reply-клавиатура для быстрого доступа"""
     keyboard = [
@@ -72,8 +93,6 @@ def get_management_keyboard():
 def get_reminders_keyboard():
     """Клавиатура для управления напоминаниями"""
     keyboard = [
-        [InlineKeyboardButton("🔔 Тест напоминаний", callback_data="test_reminders")],
-        [InlineKeyboardButton("📈 Тест недельной статистики", callback_data="test_weekly")],
         [InlineKeyboardButton("⚙️ Настройки напоминаний", callback_data="reminder_settings")],
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
     ]

@@ -369,7 +369,30 @@ class Database:
         except Exception as e:
             logger.error(f"Error deleting task: {e}")
             return False
-
+    def rename_task(self, task_id: int, new_name: str) -> bool:
+        """Переименовать задачу"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Проверяем, нет ли уже задачи с таким названием
+            cursor.execute("SELECT id FROM tasks WHERE LOWER(name) = LOWER(?) AND id != ?", (new_name, task_id))
+            existing_task = cursor.fetchone()
+            
+            if existing_task:
+                conn.close()
+                return False
+            
+            # Переименовываем задачу
+            cursor.execute("UPDATE tasks SET name = ? WHERE id = ?", (new_name, task_id))
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error renaming task: {e}")
+            return False
+    
     def get_task_by_id(self, task_id: int) -> Optional[Task]:
         """Получить задачу по ID"""
         try:

@@ -1,7 +1,28 @@
+# Python
 venv/
 __pycache__/
-*.log
-household.db
-backups/
 *.pyc
+*.pyo
+*.pyd
+
+# Базы данных
+*.db
+*.sqlite3
+
+# Логи
+*.log
+logs/
+
+# Бэкапы
+backups/
+
+# Конфиги (не коммитить!)
+config.py
 .env
+
+# VS Code
+.vscode/
+
+# Системные
+.DS_Store
+Thumbs.db
