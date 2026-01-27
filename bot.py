@@ -1,12 +1,13 @@
 import logging
+from telegram.error import BadRequest
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackContext, CallbackQueryHandler, MessageHandler, filters
 from datetime import time
-import config
-# try:
-#     import config_dev as config
-# except ImportError:
-#     import config
+#import config
+try:
+    import config_dev as config
+except ImportError:
+    import config
 from database import Database
 from reminder_system import ReminderSystem
 from utils import format_reminder_message
@@ -14,7 +15,11 @@ from keyboards import (
     get_main_keyboard,
     get_tasks_keyboard, get_management_keyboard,
     get_reminders_keyboard, get_task_selection_keyboard,
-    get_confirmation_keyboard, get_cancel_keyboard, get_back_keyboard
+    get_confirmation_keyboard, get_cancel_keyboard, get_back_keyboard,
+    # Новые импорты для списка покупок
+    get_shopping_keyboard, get_shopping_items_keyboard,
+    get_shopping_clear_confirmation, get_shopping_stats_keyboard,
+    get_shopping_back_keyboard
 )
 
 # Настройка логирования
@@ -30,6 +35,8 @@ class HouseholdBot:
         self.reminder_system = ReminderSystem(self.db)
         self.application = None
         self.user_states = {}
+        # Добавляем состояние для просмотра отмеченных пунктов покупок
+        self.shopping_show_checked = {}
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start с основной клавиатурой"""
@@ -45,6 +52,7 @@ class HouseholdBot:
 ✅ Выполнить - отметка выполнения
 🛠️ Управление - редактирование задач
 🔔 Напоминания - уведомления
+🛒 Список покупок - управление покупками
             """
             keyboard = get_main_keyboard()
             await update.message.reply_text(welcome_text, reply_markup=keyboard)
@@ -70,12 +78,266 @@ class HouseholdBot:
                 await self.manage_tasks(update, context)
             elif text == "🔔 Напоминания":
                 await self.reminder_settings(update, context)
-            else:
-                await self.handle_user_state(update, context)
+            elif text == "🛒 Список покупок":
+            # Создаем fake query для текстового сообщения
+                class FakeQuery:
+                    def __init__(self, update):
+                        self.from_user = update.effective_user
+                        self.message = update.message
+                        self.edit_message_text = self._edit_message_text
+                    
+                    async def _edit_message_text(self, text, reply_markup=None):
+                        await self.message.reply_text(text, reply_markup=reply_markup)
                 
+                fake_query = FakeQuery(update)
+                await self.show_shopping_list(fake_query, context)
+            else:
+                await self.handle_user_state(update, context)    
         except Exception as e:
             logger.error(f"Error handling text message: {e}")
             await update.message.reply_text("❌ Ошибка при обработке сообщения")
+    
+    # ================== МЕТОДЫ ДЛЯ СПИСКА ПОКУПОК ==================
+    
+    async def show_shopping_list(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Показать меню списка покупок"""
+        try:
+            keyboard = get_shopping_keyboard()
+            message = """
+    🛒 Список покупок:
+
+    • Добавить новый пункт
+    • Просмотреть/отметить пункты
+    • Очистить отмеченные или весь список
+    • Статистика списка
+            """
+            await query.edit_message_text(message, reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error(f"Error in show_shopping_list: {e}")
+            await query.edit_message_text("❌ Ошибка при открытии списка покупок")
+    
+    async def show_shopping_items(self, query, context: ContextTypes.DEFAULT_TYPE, show_checked=True):
+        """Показать список покупок с кнопками для отметки"""
+        try:
+            user_id = query.from_user.id
+            items = self.db.get_shopping_items(show_checked=show_checked)
+            
+            if not items:
+                await query.edit_message_text(
+                    "📝 Список покупок пуст. Добавьте первый пункт!",
+                    reply_markup=get_shopping_keyboard()
+                )
+                return
+            
+            # Обновляем настройку отображения для пользователя
+            self.shopping_show_checked[user_id] = show_checked
+            
+            message_lines = ["🛒 Список покупок:\n"]
+            
+            # Показываем статистику
+            stats = self.db.get_shopping_item_count()
+            if stats['total'] > 0:
+                message_lines.append(f"📊 Всего: {stats['total']} | ✅ Отмечено: {stats['checked']} | ⬜️ Неотмечено: {stats['unchecked']}\n")
+            
+            for item in items:
+                message_lines.append(f"{item.format_for_display()}")
+            
+            keyboard = get_shopping_items_keyboard(items, show_checked)
+            
+            # Используем try-except для обработки ошибки
+            try:
+                await query.edit_message_text(
+                    "\n".join(message_lines), 
+                    reply_markup=keyboard,
+                    parse_mode='HTML'
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    # Просто отвечаем на запрос без изменения сообщения
+                    await query.answer()
+                else:
+                    raise
+            
+        except Exception as e:
+            logger.error(f"Error in show_shopping_items: {e}")
+            await query.edit_message_text("❌ Ошибка при получении списка покупок")
+    
+    async def add_shopping_item(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Начать добавление нового пункта в список покупок"""
+        try:
+            user_id = query.from_user.id  # Используем query.from_user вместо update.effective_user
+            self.user_states[user_id] = "waiting_for_shopping_item"
+            
+            await query.edit_message_text(  # Используем query.edit_message_text
+                "➕ Добавление нового пункта в список покупок:\n\n"
+                "Просто напишите название пункта.\n"
+                "Например: Молоко, 2л",
+                reply_markup=get_cancel_keyboard()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in add_shopping_item: {e}")
+            await query.edit_message_text("❌ Ошибка при добавлении пункта")
+    
+    async def toggle_shopping_item(self, query, item_id: int):
+        """Переключить статус отметки пункта"""
+        try:
+            item = self.db.toggle_shopping_item(item_id)
+            
+            if item:
+                user_id = query.from_user.id
+                show_checked = self.shopping_show_checked.get(user_id, True)
+                
+                items = self.db.get_shopping_items(show_checked=show_checked)
+                if not items:
+                    await query.edit_message_text(
+                        "📝 Список покупок пуст. Добавьте новый пункт!",
+                        reply_markup=get_shopping_keyboard()
+                    )
+                    return
+                
+                # Обновляем сообщение
+                message_lines = ["🛒 Список покупок:\n"]
+                
+                stats = self.db.get_shopping_item_count()
+                if stats['total'] > 0:
+                    message_lines.append(f"📊 Всего: {stats['total']} | ✅ Отмечено: {stats['checked']} | ⬜️ Неотмечено: {stats['unchecked']}\n")
+                
+                for item in items:
+                    message_lines.append(f"{item.format_for_display()}")
+                
+                keyboard = get_shopping_items_keyboard(items, show_checked)
+                await query.edit_message_text("\n".join(message_lines), reply_markup=keyboard)
+            else:
+                await query.edit_message_text("❌ Пункт не найден")
+                
+        except Exception as e:
+            logger.error(f"Error toggling shopping item: {e}")
+            await query.edit_message_text("❌ Ошибка при обновлении пункта")
+    
+    async def clear_checked_shopping_items(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Подтверждение очистки отмеченных пунктов"""
+        try:
+            stats = self.db.get_shopping_item_count()
+            
+            if stats['checked'] == 0:
+                await query.edit_message_text(
+                    "✅ Нет отмеченных пунктов для очистки.",
+                    reply_markup=get_shopping_back_keyboard()
+                )
+                return
+            
+            keyboard = get_shopping_clear_confirmation("checked")
+            await query.edit_message_text(
+                f"🧹 Вы уверены, что хотите удалить {stats['checked']} отмеченных пунктов?",
+                reply_markup=keyboard
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in clear_checked_shopping_items: {e}")
+            await query.edit_message_text("❌ Ошибка при очистке списка")
+    
+    async def clear_all_shopping_items(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Подтверждение очистки всего списка покупок"""
+        try:
+            stats = self.db.get_shopping_item_count()
+            
+            if stats['total'] == 0:
+                await query.edit_message_text(
+                    "📝 Список покупок и так пуст.",
+                    reply_markup=get_shopping_back_keyboard()
+                )
+                return
+            
+            keyboard = get_shopping_clear_confirmation("all")
+            await query.edit_message_text(
+                f"🗑️ Вы уверены, что хотите удалить весь список ({stats['total']} пунктов)?",
+                reply_markup=keyboard
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in clear_all_shopping_items: {e}")
+            await query.edit_message_text("❌ Ошибка при очистке списка")
+    
+    async def confirm_clear_checked_items(self, query):
+        """Подтверждение удаления отмеченных пунктов"""
+        try:
+            deleted_count = self.db.delete_checked_items()
+            
+            await query.edit_message_text(
+                f"✅ Удалено {deleted_count} отмеченных пунктов.",
+                reply_markup=get_shopping_back_keyboard()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error confirming clear checked items: {e}")
+            await query.edit_message_text("❌ Ошибка при удалении пунктов")
+    
+    async def confirm_clear_all_items(self, query):
+        """Подтверждение удаления всего списка"""
+        try:
+            deleted_count = self.db.delete_all_shopping_items()
+            
+            await query.edit_message_text(
+                f"✅ Удалено {deleted_count} пунктов. Список очищен.",
+                reply_markup=get_shopping_back_keyboard()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error confirming clear all items: {e}")
+            await query.edit_message_text("❌ Ошибка при очистке списка")
+    
+    async def show_shopping_stats(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Показать статистику списка покупок"""
+        try:
+            stats = self.db.get_shopping_item_count()
+            
+            message_lines = ["📊 Статистика списка покупок:\n"]
+            message_lines.append(f"📈 Всего пунктов: {stats['total']}")
+            message_lines.append(f"✅ Отмечено: {stats['checked']}")
+            message_lines.append(f"⬜️ Не отмечено: {stats['unchecked']}")
+            
+            if stats['total'] > 0:
+                percentage = (stats['checked'] / stats['total']) * 100
+                message_lines.append(f"📊 Завершено: {percentage:.1f}%")
+            
+            keyboard = get_shopping_stats_keyboard()
+            await query.edit_message_text("\n".join(message_lines), reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error(f"Error in show_shopping_stats: {e}")
+            await query.edit_message_text("❌ Ошибка при получении статистики")
+    
+    async def process_shopping_item(self, update, user_message):
+        """Обработка добавления нового пункта в список покупок"""
+        item_text = user_message.strip()
+        
+        if not item_text:
+            await update.message.reply_text(
+                "❌ Название пункта не может быть пустым.",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
+        
+        success = self.db.add_shopping_item(item_text)
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ Пункт добавлен: {item_text}",
+                reply_markup=get_shopping_back_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Пункт '{item_text}' уже есть в списке (и не отмечен).",
+                reply_markup=get_cancel_keyboard()
+            )
+        
+        user_id = update.effective_user.id
+        if user_id in self.user_states:
+            del self.user_states[user_id]
+    
+    # ================== КОНЕЦ МЕТОДОВ ДЛЯ СПИСКА ПОКУПОК ==================
     
     async def show_tasks_with_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE, show_all=True):
         """Показать задачи с инлайн-кнопками"""
@@ -217,7 +479,47 @@ class HouseholdBot:
         data = query.data
         
         try:
-            if data.startswith("done_"):
+            # ================== ОБРАБОТКА СПИСКА ПОКУПОК ==================
+            if data == "shopping_list":
+                await self.show_shopping_list(query, context)
+            
+            elif data == "back_to_shopping":
+                await self.show_shopping_list(query, context)
+            
+            elif data == "shopping_show":
+                user_id = query.from_user.id
+                show_checked = self.shopping_show_checked.get(user_id, True)
+                await self.show_shopping_items(query, context, show_checked=show_checked)
+            
+            elif data == "shopping_toggle_view":
+                user_id = query.from_user.id
+                current = self.shopping_show_checked.get(user_id, True)
+                await self.show_shopping_items(query, context, show_checked=not current)
+            
+            elif data == "shopping_add":
+                await self.add_shopping_item(query, context)
+            
+            elif data.startswith("shopping_toggle_"):
+                item_id = int(data.split("_")[2])
+                await self.toggle_shopping_item(query, item_id)
+            
+            elif data == "shopping_clear_checked":
+                await self.clear_checked_shopping_items(query, context)
+            
+            elif data == "shopping_clear_all":
+                await self.clear_all_shopping_items(query, context)
+            
+            elif data == "shopping_confirm_clear_checked":
+                await self.confirm_clear_checked_items(query)
+            
+            elif data == "shopping_confirm_clear_all":
+                await self.confirm_clear_all_items(query)
+            
+            elif data == "shopping_stats":
+                await self.show_shopping_stats(query, context)
+            
+            # ================== ОБРАБОТКА ЗАДАЧ ==================
+            elif data.startswith("done_"):
                 task_id = int(data.split("_")[1])
                 await self.mark_task_done_from_button(query, task_id)
             
@@ -419,6 +721,8 @@ class HouseholdBot:
                 await self.process_interval_update(update, user_message, state)
             elif state.startswith("waiting_rename_"):
                 await self.process_rename_task(update, user_message, state)
+            elif state == "waiting_for_shopping_item":
+                await self.process_shopping_item(update, user_message)
                 
         except Exception as e:
             logger.error(f"Error handling user state: {e}")
@@ -524,10 +828,18 @@ class HouseholdBot:
     
     async def send_message(self, update, text, reply_markup=None):
         """Универсальный метод отправки сообщений"""
-        if hasattr(update, 'message') and update.message:
-            await update.message.reply_text(text, reply_markup=reply_markup)
-        else:
-            await update.edit_message_text(text, reply_markup=reply_markup)
+        try:
+            if hasattr(update, 'message') and update.message:
+                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+            else:
+                await update.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                # Игнорируем ошибку
+                if hasattr(update, 'answer'):
+                    await update.answer()
+            else:
+                raise
     
     # Команды для текстового интерфейса (оставляем для совместимости)
     async def add_task_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

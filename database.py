@@ -2,14 +2,15 @@ import sqlite3
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple, Dict, Any
-from models import Task
+from models import Task, ShoppingItem
 
 logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self, db_path="household.db"):
+    def __init__(self, db_path="household_dev.db"):
         self.db_path = db_path
         self.init_db()
+        self.create_shopping_table()
     
     def init_db(self):
         """Инициализация таблиц"""
@@ -56,6 +57,23 @@ class Database:
         
         # Добавляем стандартные задачи при первом запуске
         self.add_default_tasks()
+    
+    def create_shopping_table(self):
+        """Создание таблицы для списка покупок"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS shopping_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_text TEXT NOT NULL,
+                is_checked BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
     
     def add_default_tasks(self):
         """Добавление стандартных задач при первом запуске"""
@@ -107,6 +125,188 @@ class Database:
         
         conn.close()
         return tasks
+    
+    # ================== МЕТОДЫ ДЛЯ СПИСКА ПОКУПОК ==================
+    
+    def add_shopping_item(self, item_text: str) -> bool:
+        """Добавить пункт в список покупок"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Проверяем, нет ли уже такого пункта (неотмеченного)
+            cursor.execute('''
+                SELECT id FROM shopping_items 
+                WHERE LOWER(item_text) = LOWER(?) AND is_checked = 0
+            ''', (item_text,))
+            
+            existing_item = cursor.fetchone()
+            if existing_item:
+                conn.close()
+                return False
+            
+            # Добавляем новый пункт
+            cursor.execute('''
+                INSERT INTO shopping_items (item_text, is_checked) 
+                VALUES (?, 0)
+            ''', (item_text,))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding shopping item: {e}")
+            return False
+    
+    def get_shopping_items(self, show_checked: bool = True) -> List[ShoppingItem]:
+        """Получить все пункты списка покупок"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            query = '''
+                SELECT id, item_text, is_checked, created_at 
+                FROM shopping_items 
+                ORDER BY is_checked, created_at DESC
+            '''
+            
+            if not show_checked:
+                query = '''
+                    SELECT id, item_text, is_checked, created_at 
+                    FROM shopping_items 
+                    WHERE is_checked = 0
+                    ORDER BY created_at DESC
+                '''
+            
+            cursor.execute(query)
+            
+            items = []
+            for row in cursor.fetchall():
+                item = ShoppingItem(
+                    id=row[0],
+                    item_text=row[1],
+                    is_checked=bool(row[2]),
+                    created_at=datetime.fromisoformat(row[3]) if row[3] else datetime.now()
+                )
+                items.append(item)
+            
+            conn.close()
+            return items
+            
+        except Exception as e:
+            logger.error(f"Error getting shopping items: {e}")
+            return []
+    
+    def toggle_shopping_item(self, item_id: int) -> Optional[ShoppingItem]:
+        """Переключить статус отметки пункта"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Получаем текущее состояние
+            cursor.execute('''
+                SELECT id, item_text, is_checked, created_at 
+                FROM shopping_items 
+                WHERE id = ?
+            ''', (item_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return None
+            
+            # Переключаем статус
+            current_status = bool(row[2])
+            new_status = 0 if current_status else 1
+            
+            cursor.execute('''
+                UPDATE shopping_items 
+                SET is_checked = ? 
+                WHERE id = ?
+            ''', (new_status, item_id))
+            
+            conn.commit()
+            conn.close()
+            
+            # Возвращаем обновленный объект
+            return ShoppingItem(
+                id=row[0],
+                item_text=row[1],
+                is_checked=new_status,
+                created_at=datetime.fromisoformat(row[3]) if row[3] else datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error toggling shopping item: {e}")
+            return None
+    
+    def delete_checked_items(self) -> int:
+        """Удалить все отмеченные пункты"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Считаем сколько удаляем
+            cursor.execute('SELECT COUNT(*) FROM shopping_items WHERE is_checked = 1')
+            count = cursor.fetchone()[0]
+            
+            # Удаляем
+            cursor.execute('DELETE FROM shopping_items WHERE is_checked = 1')
+            
+            conn.commit()
+            conn.close()
+            return count
+            
+        except Exception as e:
+            logger.error(f"Error deleting checked items: {e}")
+            return 0
+    
+    def delete_all_shopping_items(self) -> int:
+        """Удалить все пункты списка покупок"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Считаем сколько удаляем
+            cursor.execute('SELECT COUNT(*) FROM shopping_items')
+            count = cursor.fetchone()[0]
+            
+            # Удаляем
+            cursor.execute('DELETE FROM shopping_items')
+            
+            conn.commit()
+            conn.close()
+            return count
+            
+        except Exception as e:
+            logger.error(f"Error deleting all shopping items: {e}")
+            return 0
+    
+    def get_shopping_item_count(self) -> Dict[str, int]:
+        """Получить статистику по списку покупок"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) FROM shopping_items WHERE is_checked = 0')
+            unchecked = cursor.fetchone()[0]
+            
+            cursor.execute('SELECT COUNT(*) FROM shopping_items WHERE is_checked = 1')
+            checked = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            return {
+                'total': unchecked + checked,
+                'unchecked': unchecked,
+                'checked': checked
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting shopping item count: {e}")
+            return {'total': 0, 'unchecked': 0, 'checked': 0}
+    # ================== КОНЕЦ МЕТОДОВ ДЛЯ СПИСКА ПОКУПОК ==================
     
     def mark_task_done(self, task_id: int, user_chat_id: int, username: str, first_name: str):
         """Отметить задачу выполненной"""

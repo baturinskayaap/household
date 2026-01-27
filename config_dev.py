@@ -8,6 +8,6 @@ TIMEZONE = "Asia/Krasnoyarsk"
 DATABASE_PATH = "household_dev.db"
 LOG_LEVEL = "INFO"
 DB_CONFIG = {
-    "path": "household.db",
+    "path": "household_dev.db",
     "timeout": 30
 }

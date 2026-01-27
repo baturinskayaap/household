@@ -5,6 +5,7 @@ from telegram import ReplyKeyboardRemove
 def remove_reply_keyboard():
     """Убрать reply-клавиатуру"""
     return ReplyKeyboardRemove()
+
 def get_main_inline_keyboard():
     """Inline-клавиатура для главного меню (для использования в callback queries)"""
     keyboard = [
@@ -19,15 +20,20 @@ def get_main_inline_keyboard():
         [
             InlineKeyboardButton("🛠️ Управление", callback_data="manage_tasks"),
             InlineKeyboardButton("🔔 Напоминания", callback_data="reminder_settings")
+        ],
+        [
+            InlineKeyboardButton("🛒 Список покупок", callback_data="shopping_list")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
 def get_main_keyboard():
     """Основная reply-клавиатура для быстрого доступа"""
     keyboard = [
         ["📋 Список задач", "⏰ Ближайшие"],
         ["📊 Статистика", "✅ Выполнить"],
-        ["🛠️ Управление", "🔔 Напоминания"]
+        ["🛠️ Управление", "🔔 Напоминания"],
+        ["🛒 Список покупок"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -139,6 +145,105 @@ def get_back_keyboard():
     """Простая кнопка назад"""
     keyboard = [
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)
+
+# ================== КЛАВИАТУРЫ ДЛЯ СПИСКА ПОКУПОК ==================
+
+def get_shopping_keyboard():
+    """Основная клавиатура списка покупок"""
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить пункт", callback_data="shopping_add")],
+        [InlineKeyboardButton("📋 Показать список", callback_data="shopping_show")],
+        [InlineKeyboardButton("🧹 Очистить отмеченные", callback_data="shopping_clear_checked")],
+        [InlineKeyboardButton("🗑️ Очистить все", callback_data="shopping_clear_all")],
+        [
+            InlineKeyboardButton("📊 Статистика", callback_data="shopping_stats"),
+            InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
+        ]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_shopping_items_keyboard(items, show_checked=True):
+    """
+    Клавиатура с пунктами списка покупок
+    
+    Args:
+        items: список ShoppingItem
+        show_checked: показывать отмеченные пункты
+    """
+    keyboard = []
+    
+    if not items:
+        keyboard.append([InlineKeyboardButton("📝 Список покупок пуст", callback_data="no_action")])
+        return InlineKeyboardMarkup(keyboard)
+    
+    # Фильтруем если нужно скрыть отмеченные
+    display_items = items if show_checked else [item for item in items if not item.is_checked]
+    
+    if not display_items and not show_checked:
+        keyboard.append([InlineKeyboardButton("🎉 Нет неотмеченных пунктов!", callback_data="shopping_show")])
+        return InlineKeyboardMarkup(keyboard)
+    
+    # Создаем кнопки для каждого пункта
+    for item in display_items:
+        status = "✅" if item.is_checked else "⬜️"
+        button_text = f"{status} {item.item_text}"
+        if item.is_checked and len(button_text) > 40:
+            button_text = button_text[:37] + "..."
+        
+        keyboard.append([
+            InlineKeyboardButton(button_text, callback_data=f"shopping_toggle_{item.id}")
+        ])
+    
+    # Кнопки управления
+    toggle_text = "⬜️ Только неотмеченные" if show_checked else "✅ Показать все"
+    keyboard.append([
+        InlineKeyboardButton(toggle_text, callback_data="shopping_toggle_view"),
+        InlineKeyboardButton("🔄 Обновить", callback_data="shopping_show")
+    ])
+    
+    keyboard.append([
+        InlineKeyboardButton("➕ Добавить", callback_data="shopping_add"),
+        InlineKeyboardButton("🔙 Назад", callback_data="back_to_shopping")
+    ])
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_shopping_clear_confirmation(clear_type="checked"):
+    """Клавиатура подтверждения очистки списка покупок"""
+    if clear_type == "checked":
+        text = "🧹 Очистить отмеченные?"
+        callback = "shopping_confirm_clear_checked"
+    else:
+        text = "🗑️ Очистить весь список?"
+        callback = "shopping_confirm_clear_all"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Да", callback_data=callback),
+            InlineKeyboardButton("❌ Нет", callback_data="shopping_show")
+        ]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_shopping_stats_keyboard():
+    """Клавиатура для статистики списка покупок"""
+    keyboard = [
+        [InlineKeyboardButton("📋 Показать список", callback_data="shopping_show")],
+        [InlineKeyboardButton("➕ Добавить пункт", callback_data="shopping_add")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_shopping")]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_shopping_back_keyboard():
+    """Клавиатура для возврата в меню списка покупок"""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Назад в список покупок", callback_data="back_to_shopping")]
     ]
     
     return InlineKeyboardMarkup(keyboard)
