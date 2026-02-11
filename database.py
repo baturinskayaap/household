@@ -52,6 +52,20 @@ class Database:
             )
         ''')
         
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_task_history_date 
+            ON task_history(done_at)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_task_history_task 
+            ON task_history(task_id)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_tasks_interval 
+            ON tasks(interval_days)
+        ''')
         conn.commit()
         conn.close()
         
@@ -335,6 +349,9 @@ class Database:
         
         conn.commit()
         conn.close()
+        self.cleanup_old_history()
+
+    
     
     def find_task_by_name(self, task_name: str) -> Optional[Task]:
         """Найти задачу по названию (регистронезависимо)"""
@@ -389,119 +406,65 @@ class Database:
                     due_soon.append(task)
         
         return due_soon
-    
-    def get_user_statistics(self, days: int = 30) -> Dict[str, Any]:
-        """Получить расширенную статистику по пользователям"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Статистика выполненных задач по пользователям
-        since_date = (datetime.now() - timedelta(days=days)).isoformat()
-        
-        cursor.execute('''
-            SELECT 
-                u.first_name,
-                COUNT(th.id) as task_count,
-                GROUP_CONCAT(DISTINCT t.name) as task_names
-            FROM task_history th
-            JOIN users u ON th.done_by = u.chat_id
-            JOIN tasks t ON th.task_id = t.id
-            WHERE th.done_at >= ?
-            GROUP BY u.first_name
-            ORDER BY task_count DESC
-        ''', (since_date,))
-        
-        user_stats = {}
-        total_tasks = 0
-        
-        for row in cursor.fetchall():
-            user_name, count, task_names = row
-            user_stats[user_name] = {
-                'task_count': count,
-                'tasks': task_names.split(',') if task_names else []
-            }
-            total_tasks += count
-        
-        # Самые частые задачи
-        cursor.execute('''
-            SELECT 
-                t.name,
-                COUNT(th.id) as completion_count
-            FROM task_history th
-            JOIN tasks t ON th.task_id = t.id
-            WHERE th.done_at >= ?
-            GROUP BY t.name
-            ORDER BY completion_count DESC
-            LIMIT 5
-        ''', (since_date,))
-        
-        popular_tasks = cursor.fetchall()
-        
-        # Статистика по дням недели
-        cursor.execute('''
-            SELECT 
-                strftime('%w', th.done_at) as weekday,
-                COUNT(th.id) as task_count
-            FROM task_history th
-            WHERE th.done_at >= ?
-            GROUP BY weekday
-            ORDER BY weekday
-        ''', (since_date,))
-        
-        weekday_stats = cursor.fetchall()
-        
-        conn.close()
-        
-        return {
-            'user_stats': user_stats,
-            'total_tasks': total_tasks,
-            'popular_tasks': popular_tasks,
-            'weekday_stats': weekday_stats,
-            'period_days': days
-        }
-    
-    def get_completion_rate(self, task_id: int, days: int = 30) -> float:
-        """Получить процент своевременного выполнения задачи"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        since_date = (datetime.now() - timedelta(days=days)).isoformat()
-        
-        # Получаем интервал задачи
-        cursor.execute('SELECT interval_days FROM tasks WHERE id = ?', (task_id,))
-        interval = cursor.fetchone()[0]
-        
-        # Считаем выполненные вовремя (в пределах интервала + 1 день grace period)
-        cursor.execute('''
-            SELECT COUNT(*) 
-            FROM task_history th1
-            WHERE th1.task_id = ? 
-            AND th1.done_at >= ?
-            AND NOT EXISTS (
-                SELECT 1 
-                FROM task_history th2 
-                WHERE th2.task_id = th1.task_id 
-                AND th2.done_at < th1.done_at 
-                AND th2.done_at > datetime(th1.done_at, ?)
-            )
-        ''', (task_id, since_date, f'-{interval + 1} days'))
-        
-        on_time = cursor.fetchone()[0]
-        
-        # Общее количество выполнений
-        cursor.execute('''
-            SELECT COUNT(*) 
-            FROM task_history 
-            WHERE task_id = ? AND done_at >= ?
-        ''', (task_id, since_date))
-        
-        total = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        return (on_time / total * 100) if total > 0 else 0
 
     # ДОБАВЛЯЕМ НОВЫЕ МЕТОДЫ ДЛЯ УПРАВЛЕНИЯ ЗАДАЧАМИ
+
+    def cleanup_old_history(self, days_to_keep: int = 90):
+        """Автоматическая очистка старых записей истории (старше 90 дней)"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cutoff_date = (datetime.now() - timedelta(days=days_to_keep)).isoformat()
+            
+            # Удаляем старые записи
+            cursor.execute('''
+                DELETE FROM task_history 
+                WHERE done_at < ?
+            ''', (cutoff_date,))
+            
+            deleted_count = cursor.rowcount
+            
+            conn.commit()
+            conn.close()
+            
+            if deleted_count > 0:
+                logger.info(f"🧹 Автоочистка: удалено {deleted_count} старых записей истории")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning old history: {e}")
+    
+    def get_history_stats(self) -> Dict[str, int]:
+        """Получить статистику по истории выполнений"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Всего записей
+            cursor.execute('SELECT COUNT(*) FROM task_history')
+            total = cursor.fetchone()[0]
+            
+            # За последние 30 дней
+            since_date = (datetime.now() - timedelta(days=30)).isoformat()
+            cursor.execute('SELECT COUNT(*) FROM task_history WHERE done_at >= ?', (since_date,))
+            last_30_days = cursor.fetchone()[0]
+            
+            # За последние 7 дней
+            since_week = (datetime.now() - timedelta(days=7)).isoformat()
+            cursor.execute('SELECT COUNT(*) FROM task_history WHERE done_at >= ?', (since_week,))
+            last_7_days = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            return {
+                'total': total,
+                'last_30_days': last_30_days,
+                'last_7_days': last_7_days
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting history stats: {e}")
+            return {'total': 0, 'last_30_days': 0, 'last_7_days': 0}
 
     def add_new_task(self, name: str, interval_days: int) -> bool:
         """Добавить новую задачу"""

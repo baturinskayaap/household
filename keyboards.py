@@ -6,36 +6,31 @@ def remove_reply_keyboard():
     """Убрать reply-клавиатуру"""
     return ReplyKeyboardRemove()
 
-def get_main_inline_keyboard():
-    """Inline-клавиатура для главного меню (для использования в callback queries)"""
+# ================== НОВЫЕ КЛАВИАТУРЫ ДЛЯ УПРОЩЕННОГО ИНТЕРФЕЙСА ==================
+
+def get_main_keyboard():
+    """Основная reply-клавиатура для быстрого доступа (3 кнопки)"""
     keyboard = [
-        [
-            InlineKeyboardButton("📋 Список задач", callback_data="show_tasks"),
-            InlineKeyboardButton("⏰ Ближайшие", callback_data="show_urgent_tasks")
-        ],
-        [
-            InlineKeyboardButton("📊 Статистика", callback_data="show_stats"),
-            InlineKeyboardButton("✅ Выполнить", callback_data="quick_done")
-        ],
-        [
-            InlineKeyboardButton("🛠️ Управление", callback_data="manage_tasks"),
-            InlineKeyboardButton("🔔 Напоминания", callback_data="reminder_settings")
-        ],
-        [
-            InlineKeyboardButton("🛒 Список покупок", callback_data="shopping_list")
-        ]
+        ["📋 Задачи", "🛒 Покупки"],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_main_inline_keyboard():
+    """Inline-клавиатура для главного меню"""
+    keyboard = [
+        [InlineKeyboardButton("📋 Задачи", callback_data="tasks_main")],
+        [InlineKeyboardButton("🛒 Покупки", callback_data="shopping_list")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_main_keyboard():
-    """Основная reply-клавиатура для быстрого доступа"""
+def get_tasks_menu_keyboard():
+    """Клавиатура для меню задач"""
     keyboard = [
-        ["📋 Список задач", "⏰ Ближайшие"],
-        ["📊 Статистика", "✅ Выполнить"],
-        ["🛠️ Управление", "🔔 Напоминания"],
-        ["🛒 Список покупок"]
+        [InlineKeyboardButton("📝 Все задачи", callback_data="show_tasks")],
+        [InlineKeyboardButton("🛠️ Управление задачами", callback_data="manage_tasks")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return InlineKeyboardMarkup(keyboard)
 
 def get_tasks_keyboard(show_all=False):
     """Клавиатура для быстрого выполнения задач"""
@@ -46,37 +41,62 @@ def get_tasks_keyboard(show_all=False):
     
     if not tasks:
         keyboard.append([InlineKeyboardButton("📝 Нет задач - добавьте первую!", callback_data="add_task")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_tasks_menu")])
         return InlineKeyboardMarkup(keyboard)
     
     # Показываем только срочные задачи или все
     if not show_all:
-        tasks = [t for t in tasks if t.is_overdue() or t.days_until_due() <= 2]
+        filtered_tasks = []
+        for task in tasks:
+            if task.last_done is None:
+                # Задачи, которые никогда не выполнялись, считаем срочными
+                filtered_tasks.append(task)
+            elif task.is_overdue():
+                filtered_tasks.append(task)
+            elif task.days_until_due() <= 2:
+                filtered_tasks.append(task)
+        tasks = filtered_tasks
     
     if not tasks:
         keyboard.append([InlineKeyboardButton("🎉 Все задачи выполнены!", callback_data="refresh_tasks")])
         keyboard.append([InlineKeyboardButton("📋 Показать все задачи", callback_data="show_all_tasks")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_tasks_menu")])
         return InlineKeyboardMarkup(keyboard)
     
     # Создаем кнопки по 2 в ряд
     for i in range(0, len(tasks), 2):
         row = []
         for task in tasks[i:i+2]:
-            emoji = "🔴" if task.is_overdue() else "🟡" if task.days_until_due() <= 1 else "✅"
+            if task.last_done is None:
+                emoji = "🆕"  # Новая задача
+            elif task.is_overdue():
+                emoji = "🔴"  # Просрочено
+            elif task.days_until_due() <= 1:
+                emoji = "🟡"  # Срочно
+            else:
+                emoji = "✅"  # В норме
+            
+            # Обрезаем длинные названия
+            task_name = task.name
+            if len(task_name) > 15:
+                task_name = task_name[:12] + "..."
+            
             row.append(InlineKeyboardButton(
-                f"{emoji} {task.name}", 
+                f"{emoji} {task_name}", 
                 callback_data=f"done_{task.id}"
             ))
         keyboard.append(row)
     
     # Дополнительные кнопки
-    if not show_all and len(tasks) < len(db.get_all_tasks()):
+    all_tasks_count = len(db.get_all_tasks())
+    if not show_all and len(tasks) < all_tasks_count:
         keyboard.append([InlineKeyboardButton("📋 Показать все задачи", callback_data="show_all_tasks")])
-    else:
+    elif show_all and all_tasks_count > 0:
         keyboard.append([InlineKeyboardButton("⏰ Только срочные", callback_data="show_urgent_tasks")])
     
     keyboard.append([
         InlineKeyboardButton("🔄 Обновить", callback_data="refresh_tasks"),
-        InlineKeyboardButton("📊 Статистика", callback_data="show_stats")
+        InlineKeyboardButton("🔙 Назад", callback_data="back_to_tasks_menu")
     ])
     
     return InlineKeyboardMarkup(keyboard)
@@ -84,23 +104,12 @@ def get_tasks_keyboard(show_all=False):
 def get_management_keyboard():
     """Клавиатура для управления задачами"""
     keyboard = [
-        [InlineKeyboardButton("📝 Добавить задачу", callback_data="add_task")],
-        [InlineKeyboardButton("⚙️ Редактировать интервал", callback_data="edit_interval")],
-        [InlineKeyboardButton("✏️ Переименовать задачу", callback_data="rename_task")],
+        [InlineKeyboardButton("📝 Добавить задачу", callback_data="add_task"),],
+        [InlineKeyboardButton("⚙️ Редактировать интервал", callback_data="edit_interval"),],
+        [InlineKeyboardButton("✏️ Переименовать задачу", callback_data="rename_task"),],
         [InlineKeyboardButton("🗑️ Удалить задачу", callback_data="delete_task")],
-        [
-            InlineKeyboardButton("📋 Список задач", callback_data="show_tasks"),
-            InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
-        ]
-    ]
-    
-    return InlineKeyboardMarkup(keyboard)
-
-def get_reminders_keyboard():
-    """Клавиатура для управления напоминаниями"""
-    keyboard = [
-        [InlineKeyboardButton("⚙️ Настройки напоминаний", callback_data="reminder_settings")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton("📋 Список задач", callback_data="show_tasks"),],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_tasks_menu"),],
     ]
     
     return InlineKeyboardMarkup(keyboard)
@@ -149,46 +158,37 @@ def get_back_keyboard():
     
     return InlineKeyboardMarkup(keyboard)
 
-# ================== КЛАВИАТУРЫ ДЛЯ СПИСКА ПОКУПОК ==================
+# ================== КЛАВИАТУРЫ ДЛЯ СПИСКА ПОКУПОК (без изменений) ==================
 
 def get_shopping_keyboard():
     """Основная клавиатура списка покупок"""
     keyboard = [
         [InlineKeyboardButton("➕ Добавить пункт", callback_data="shopping_add")],
         [InlineKeyboardButton("📋 Показать список", callback_data="shopping_show")],
-        [InlineKeyboardButton("🧹 Очистить отмеченные", callback_data="shopping_clear_checked")],
-        [InlineKeyboardButton("🗑️ Очистить все", callback_data="shopping_clear_all")],
-        [
-            InlineKeyboardButton("📊 Статистика", callback_data="shopping_stats"),
-            InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
-        ]
+        [InlineKeyboardButton("🗑️ Быстрая очистка", callback_data="shopping_quick_clear")],
     ]
     
     return InlineKeyboardMarkup(keyboard)
 
-def get_shopping_items_keyboard(items, show_checked=True):
+def get_shopping_items_keyboard(items, stats, show_checked=True):
     """
     Клавиатура с пунктами списка покупок
     
     Args:
         items: список ShoppingItem
+        stats: статистика списка (total, checked, unchecked)
         show_checked: показывать отмеченные пункты
     """
     keyboard = []
     
     if not items:
         keyboard.append([InlineKeyboardButton("📝 Список покупок пуст", callback_data="no_action")])
-        return InlineKeyboardMarkup(keyboard)
-    
-    # Фильтруем если нужно скрыть отмеченные
-    display_items = items if show_checked else [item for item in items if not item.is_checked]
-    
-    if not display_items and not show_checked:
-        keyboard.append([InlineKeyboardButton("🎉 Нет неотмеченных пунктов!", callback_data="shopping_show")])
+        keyboard.append([InlineKeyboardButton("➕ Добавить пункт", callback_data="shopping_add")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_shopping")])
         return InlineKeyboardMarkup(keyboard)
     
     # Создаем кнопки для каждого пункта
-    for item in display_items:
+    for item in items:
         status = "✅" if item.is_checked else "⬜️"
         button_text = f"{status} {item.item_text}"
         if item.is_checked and len(button_text) > 40:
@@ -198,15 +198,32 @@ def get_shopping_items_keyboard(items, show_checked=True):
             InlineKeyboardButton(button_text, callback_data=f"shopping_toggle_{item.id}")
         ])
     
-    # Кнопки управления
+    # Кнопки управления видом
     toggle_text = "⬜️ Только неотмеченные" if show_checked else "✅ Показать все"
     keyboard.append([
         InlineKeyboardButton(toggle_text, callback_data="shopping_toggle_view"),
         InlineKeyboardButton("🔄 Обновить", callback_data="shopping_show")
     ])
     
-    keyboard.append([
+    # Кнопки добавления и очистки
+    row = [
         InlineKeyboardButton("➕ Добавить", callback_data="shopping_add"),
+    ]
+    
+    # Добавляем кнопку очистки отмеченных, если они есть
+    if stats['checked'] > 0:
+        row.append(InlineKeyboardButton("🧹 Отмеченные", callback_data="shopping_clear_checked"))
+    
+    keyboard.append(row)
+    
+    # Кнопка очистки всего списка, если есть пункты
+    if stats['total'] > 0:
+        keyboard.append([
+            InlineKeyboardButton("🗑️ Очистить все", callback_data="shopping_clear_all")
+        ])
+    
+    # Кнопка возврата
+    keyboard.append([
         InlineKeyboardButton("🔙 Назад", callback_data="back_to_shopping")
     ])
     
@@ -246,4 +263,20 @@ def get_shopping_back_keyboard():
         [InlineKeyboardButton("🔙 Назад в список покупок", callback_data="back_to_shopping")]
     ]
     
+    return InlineKeyboardMarkup(keyboard)
+
+# В файле keyboards.py добавим новую клавиатуру:
+
+def get_shopping_add_stream_keyboard():
+    """Клавиатура для режима потокового добавления пунктов"""
+    keyboard = [
+        [InlineKeyboardButton("🔚 Завершить добавление", callback_data="shopping_exit_stream")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_shopping_back_to_stream_keyboard():
+    """Клавиатура для возврата в потоковый режим после добавления"""
+    keyboard = [
+        [InlineKeyboardButton("🔚 Завершить", callback_data="shopping_exit_stream")]
+    ]
     return InlineKeyboardMarkup(keyboard)

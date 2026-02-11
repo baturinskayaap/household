@@ -23,10 +23,10 @@ class Task:
     
     def days_until_due(self) -> int:
         if not self.last_done:
-            return 0
+            return self.interval_days  # Изменено с 0 на interval_days
         days_passed = self.days_since_done() or 0
         return max(0, self.interval_days - days_passed)
-    
+        
     def get_status_emoji(self) -> str:
         """Получить смайлик статуса"""
         if self.last_done is None:
